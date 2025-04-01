@@ -1,4 +1,3 @@
-# app/train_model.py
 import os
 import subprocess
 import pandas as pd
@@ -17,18 +16,26 @@ def train_model():
     df['date'] = pd.to_datetime(df['date'])
     df = df.sort_values("date")
     
-    feature_cols = ['day_of_week', 'is_weekend', 'promotion_count', 'discount_flag', 'base_price', 'discount_amount', 'service_id', 'category_id']
+    # Các feature dùng để train
+    feature_cols = ['day_of_week', 'is_weekend', 'promotion_count', 
+                    'discount_flag', 'base_price', 'discount_amount',
+                    'service_id', 'category_id']
     X = df[feature_cols]
     y = df['booking_count']
     
+    # === Thủ thuật smoothing ===
+    # Nếu booking_count=0, ta thay = 0.5 (hoặc số dương nhỏ) => model sẽ học rằng
+    # vẫn có khả năng booking > 0, tránh predict cứng = 0
+    y_smoothed = y.apply(lambda val: val if val > 0 else 0.5)
+
     model = RandomForestRegressor(
         n_estimators=100,
         random_state=42,
-        min_samples_leaf=2  # Thêm dòng này
+        min_samples_leaf=2
     )
 
-    model.fit(X, y)
-    
+    model.fit(X, y_smoothed)  # Train với y_smoothed
+
     with open(MODEL_FILE, "wb") as f:
         pickle.dump(model, f)
 
