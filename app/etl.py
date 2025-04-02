@@ -1,4 +1,5 @@
 import os
+import sys
 import pandas as pd
 import pyodbc
 import warnings
@@ -6,11 +7,8 @@ import warnings
 # Tắt cảnh báo về SQLAlchemy của pandas
 warnings.filterwarnings("ignore", message="pandas only supports SQLAlchemy connectable")
 
-# Định nghĩa thư mục gốc và file data.csv (sẽ ghi đè file cũ)
 BASE_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 DATA_FILE = os.path.join(BASE_DIR, "data.csv")
-if os.path.exists(DATA_FILE):
-    os.remove(DATA_FILE)
 
 # Thông tin kết nối DB
 DB_USERNAME = "petfriends"
@@ -26,6 +24,42 @@ conn_str = (
     f"UID={DB_USERNAME};"
     f"PWD={DB_PASSWORD};"
 )
+
+# Hàm kiểm tra xem DB có data mới không
+def db_has_new_data():
+    try:
+        conn = pyodbc.connect(conn_str)
+        query_max_date = "SELECT MAX(CAST(DateGiven AS DATE)) as max_date FROM [petfriends].[dbo].[AppointmentClinicService]"
+        df_max = pd.read_sql(query_max_date, conn)
+        conn.close()
+        db_max_date = pd.to_datetime(df_max['max_date'][0]).normalize()
+    except Exception as e:
+        print("Lỗi khi truy vấn DB max date:", e)
+        return True  # Nếu có lỗi, an toàn là update
+
+    if os.path.exists(DATA_FILE):
+        try:
+            df_existing = pd.read_csv(DATA_FILE, parse_dates=['date'])
+            existing_max_date = df_existing['date'].max().normalize()
+            # Nếu DB max date lớn hơn file hiện tại, tức có data mới
+            if db_max_date > existing_max_date:
+                return True
+            else:
+                return False
+        except Exception as e:
+            print("Lỗi khi đọc file data.csv:", e)
+            return True
+    else:
+        return True
+
+# Kiểm tra nếu không có data mới thì dừng ETL
+if not db_has_new_data():
+    print("Không có dữ liệu mới. ETL không chạy.")
+    sys.exit(0)
+
+# Nếu có data mới, ta tiến hành update file data.csv
+
+# (Tiếp theo là phần ETL như cũ)
 
 try:
     conn = pyodbc.connect(conn_str)
@@ -116,9 +150,9 @@ cols_to_drop = [col for col in merged.columns if col.endswith('_booking')]
 merged = merged.drop(columns=cols_to_drop)
 
 # Tính các feature từ cột date
-merged['day_of_week'] = merged['date'].dt.weekday  # Monday=0,..., Sunday=6
+merged['day_of_week'] = merged['date'].dt.weekday
 merged['is_weekend'] = merged['date'].dt.weekday.apply(lambda x: 1 if x >= 5 else 0)
-merged['promotion_count'] = 0  # Không có dữ liệu promotion trong service reference
+merged['promotion_count'] = 0
 
 # Đảm bảo discount_from và discount_to không NULL: fill bằng default nếu cần
 default_date = pd.to_datetime('1900-01-01')
@@ -142,7 +176,7 @@ merged['price'] = merged.apply(lambda row: row['base_price'] - row['discount_amo
 # Lấy các cột cần thiết
 final_df = merged.copy()
 
-# Chuyển đổi service_id và category_id sang numeric codes để model có thể học được
+# Chuyển đổi service_id và category_id sang numeric codes để model học được
 final_df['service_id'] = final_df['service_id'].astype('category')
 service_mapping = dict(enumerate(final_df['service_id'].cat.categories))
 final_df['service_id'] = final_df['service_id'].cat.codes

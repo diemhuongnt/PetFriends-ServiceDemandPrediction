@@ -227,7 +227,7 @@ def update_etl_and_retrain():
         pass
 
 scheduler = BackgroundScheduler()
-scheduler.add_job(update_etl_and_retrain, 'interval', hours=1, coalesce=True, max_instances=1)
+scheduler.add_job(update_etl_and_retrain, 'interval', hours=0.15, coalesce=True, max_instances=1)
 scheduler.start()
 
 @app.on_event("shutdown")
