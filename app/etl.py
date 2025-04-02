@@ -70,7 +70,7 @@ except Exception as e:
 # Query booking data: lấy booking từ AppointmentClinicService (bao gồm cả service mới)
 query_booking = """
 SELECT 
-    CAST(acs.DateGiven AS DATE) AS date,
+    CAST(apt.StartAt AS DATE) AS date,
     cs.Category AS category_id,
     cs.Id AS service_id,
     cs.Name AS service_name,
@@ -78,29 +78,42 @@ SELECT
     ISNULL(cs.DiscountAmount, 0) AS discount_amount,
     CAST(cs.DiscountFrom AS DATE) AS discount_from,
     CAST(cs.DiscountTo AS DATE) AS discount_to,
+
     CASE 
-        WHEN DATEPART(WEEKDAY, acs.DateGiven) = 1 THEN 6
-        ELSE DATEPART(WEEKDAY, acs.DateGiven) - 2
+        WHEN DATEPART(WEEKDAY, apt.StartAt) = 1 THEN 6
+        ELSE DATEPART(WEEKDAY, apt.StartAt) - 2
     END AS day_of_week,
+
     CASE 
-        WHEN DATEPART(WEEKDAY, acs.DateGiven) IN (1, 7) THEN 1 
+        WHEN DATEPART(WEEKDAY, apt.StartAt) IN (1, 7) THEN 1 
         ELSE 0
     END AS is_weekend,
+
     COUNT(DISTINCT p.Id) AS promotion_count,
+
     CASE 
         WHEN cs.DiscountFrom IS NULL OR cs.DiscountTo IS NULL THEN 0
-        WHEN acs.DateGiven >= cs.DiscountFrom AND acs.DateGiven <= cs.DiscountTo THEN 1 
+        WHEN apt.StartAt >= cs.DiscountFrom AND apt.StartAt <= cs.DiscountTo THEN 1 
         ELSE 0 
     END AS discount_flag,
+
     COUNT(DISTINCT acs.Id) AS booking_count
+
 FROM 
-    [petfriends].[dbo].[AppointmentClinicService] acs
+    [petfriends].[dbo].[AppointmentClinicService] AS acs
 JOIN 
-    [petfriends].[dbo].[ClinicService] cs ON acs.ClinicServiceId = cs.Id
+    [petfriends].[dbo].[Appointment] AS apt
+      ON apt.Id = acs.AppointmentId
+JOIN 
+    [petfriends].[dbo].[ClinicService] AS cs
+      ON acs.ClinicServiceId = cs.Id
 LEFT JOIN 
-    [petfriends].[dbo].[Promotion] p ON p.StartDate <= acs.DateGiven AND p.EndDate >= acs.DateGiven
+    [petfriends].[dbo].[Promotion] AS p
+      ON p.StartDate <= apt.StartAt 
+      AND p.EndDate >= apt.StartAt
+
 GROUP BY 
-    CAST(acs.DateGiven AS DATE),
+    CAST(apt.StartAt AS DATE),
     cs.Id,
     cs.Category,
     cs.Name,
@@ -108,21 +121,25 @@ GROUP BY
     cs.DiscountAmount,
     cs.DiscountFrom, 
     cs.DiscountTo,
+
     CASE 
-        WHEN DATEPART(WEEKDAY, acs.DateGiven) = 1 THEN 6
-        ELSE DATEPART(WEEKDAY, acs.DateGiven) - 2
+        WHEN DATEPART(WEEKDAY, apt.StartAt) = 1 THEN 6
+        ELSE DATEPART(WEEKDAY, apt.StartAt) - 2
     END,
+
     CASE 
-        WHEN DATEPART(WEEKDAY, acs.DateGiven) IN (1, 7) THEN 1 
+        WHEN DATEPART(WEEKDAY, apt.StartAt) IN (1, 7) THEN 1 
         ELSE 0
     END,
+
     CASE 
         WHEN cs.DiscountFrom IS NULL OR cs.DiscountTo IS NULL THEN 0
-        WHEN acs.DateGiven >= cs.DiscountFrom AND acs.DateGiven <= cs.DiscountTo THEN 1 
+        WHEN apt.StartAt >= cs.DiscountFrom AND apt.StartAt <= cs.DiscountTo THEN 1 
         ELSE 0 
     END
+
 ORDER BY 
-    CAST(acs.DateGiven AS DATE);
+    CAST(apt.StartAt AS DATE);
 """
 df_booking = pd.read_sql(query_booking, conn)
 df_booking['date'] = pd.to_datetime(df_booking['date']).dt.normalize()

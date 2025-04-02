@@ -49,6 +49,9 @@ def predict_next7days():
     current_date = Timestamp.today().normalize()
     future_dates = pd.date_range(start=current_date + pd.Timedelta(days=1), periods=7)
     
+    print("Current date:", current_date)
+    print("Future dates:", future_dates)
+    
     services = df.groupby(['service_id','service_name','category_id','base_price','discount_amount','discount_flag'], as_index=False).first()
 
     predictions = []
