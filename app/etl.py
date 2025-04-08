@@ -4,13 +4,11 @@ import pandas as pd
 import pyodbc
 import warnings
 
-# Tắt cảnh báo về SQLAlchemy của pandas
 warnings.filterwarnings("ignore", message="pandas only supports SQLAlchemy connectable")
 
 BASE_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 DATA_FILE = os.path.join(BASE_DIR, "data.csv")
 
-# Thông tin kết nối DB
 DB_USERNAME = "petfriends"
 DB_PASSWORD = "Admin@123"
 DB_SERVER   = "160.30.137.29"
@@ -25,7 +23,6 @@ conn_str = (
     f"PWD={DB_PASSWORD};"
 )
 
-# Hàm kiểm tra xem DB có data mới không
 def db_has_new_data():
     try:
         conn = pyodbc.connect(conn_str)
@@ -33,33 +30,28 @@ def db_has_new_data():
         df_max = pd.read_sql(query_max_date, conn)
         conn.close()
         db_max_date = pd.to_datetime(df_max['max_date'][0]).normalize()
+        print("DB max date:", db_max_date)
     except Exception as e:
-        print("Lỗi khi truy vấn DB max date:", e)
-        return True  # Nếu có lỗi, an toàn là update
-
-    if os.path.exists(DATA_FILE):
-        try:
-            df_existing = pd.read_csv(DATA_FILE, parse_dates=['date'])
-            existing_max_date = df_existing['date'].max().normalize()
-            # Nếu DB max date lớn hơn file hiện tại, tức có data mới
-            if db_max_date > existing_max_date:
-                return True
-            else:
-                return False
-        except Exception as e:
-            print("Lỗi khi đọc file data.csv:", e)
-            return True
-    else:
+        print("Error querying DB max date:", e)
         return True
 
-# Kiểm tra nếu không có data mới thì dừng ETL
-if not db_has_new_data():
-    print("Không có dữ liệu mới. ETL không chạy.")
-    sys.exit(0)
+    if not os.path.exists(DATA_FILE):
+        print("data.csv does not exist. Will update.")
+        return True
 
-# Nếu có data mới, ta tiến hành update file data.csv
-
-# (Tiếp theo là phần ETL như cũ)
+    try:
+        df_existing = pd.read_csv(DATA_FILE, parse_dates=['date'])
+        existing_max_date = df_existing['date'].max().normalize()
+        print("Existing data.csv max date:", existing_max_date)
+        if db_max_date > existing_max_date:
+            print("DB has newer data than data.csv. Will update.")
+            return True
+        else:
+            print("data.csv is up-to-date.")
+            return False
+    except Exception as e:
+        print("Error reading data.csv:", e)
+        return True
 
 try:
     conn = pyodbc.connect(conn_str)
@@ -67,7 +59,6 @@ except Exception as e:
     print("Lỗi kết nối SQL Server:", e)
     raise
 
-# Query booking data: lấy booking từ AppointmentClinicService (bao gồm cả service mới)
 query_booking = """
 SELECT 
     CAST(apt.StartAt AS DATE) AS date,
@@ -78,25 +69,25 @@ SELECT
     ISNULL(cs.DiscountAmount, 0) AS discount_amount,
     CAST(cs.DiscountFrom AS DATE) AS discount_from,
     CAST(cs.DiscountTo AS DATE) AS discount_to,
-
+    
     CASE 
         WHEN DATEPART(WEEKDAY, apt.StartAt) = 1 THEN 6
         ELSE DATEPART(WEEKDAY, apt.StartAt) - 2
     END AS day_of_week,
-
+    
     CASE 
         WHEN DATEPART(WEEKDAY, apt.StartAt) IN (1, 7) THEN 1 
         ELSE 0
     END AS is_weekend,
-
+    
     COUNT(DISTINCT p.Id) AS promotion_count,
-
+    
     CASE 
         WHEN cs.DiscountFrom IS NULL OR cs.DiscountTo IS NULL THEN 0
         WHEN apt.StartAt >= cs.DiscountFrom AND apt.StartAt <= cs.DiscountTo THEN 1 
         ELSE 0 
     END AS discount_flag,
-
+    
     COUNT(DISTINCT acs.Id) AS booking_count
 
 FROM 
@@ -121,17 +112,14 @@ GROUP BY
     cs.DiscountAmount,
     cs.DiscountFrom, 
     cs.DiscountTo,
-
     CASE 
         WHEN DATEPART(WEEKDAY, apt.StartAt) = 1 THEN 6
         ELSE DATEPART(WEEKDAY, apt.StartAt) - 2
     END,
-
     CASE 
         WHEN DATEPART(WEEKDAY, apt.StartAt) IN (1, 7) THEN 1 
         ELSE 0
     END,
-
     CASE 
         WHEN cs.DiscountFrom IS NULL OR cs.DiscountTo IS NULL THEN 0
         WHEN apt.StartAt >= cs.DiscountFrom AND apt.StartAt <= cs.DiscountTo THEN 1 
@@ -141,71 +129,32 @@ GROUP BY
 ORDER BY 
     CAST(apt.StartAt AS DATE);
 """
+
+# Đọc dữ liệu booking
 df_booking = pd.read_sql(query_booking, conn)
 df_booking['date'] = pd.to_datetime(df_booking['date']).dt.normalize()
 
-# Lấy danh sách service duy nhất từ booking data
-services_df = df_booking[['service_id','service_name','category_id','base_price','discount_amount','discount_from','discount_to']].drop_duplicates()
+# Chỉ giữ lại những ngày có booking (không làm cartesian join toàn bộ các ngày trong khoảng)
+final_df = df_booking.copy()
 
-# Sử dụng khoảng thời gian cố định: từ 30 ngày trước đến hôm nay (normalized)
-start_date = pd.Timestamp.today().normalize() - pd.Timedelta(days=30)
-end_date = pd.Timestamp.today().normalize()
-full_dates = pd.date_range(start=start_date, end=end_date, freq='D')
-dates_df = pd.DataFrame({'date': full_dates})
+# Nếu bạn muốn huấn luyện mô hình chỉ dựa trên dữ liệu có booking thực tế,
+# bạn có thể loại bỏ những hàng có booking_count == 0.
+final_df = final_df[final_df['booking_count'] > 0].copy()
 
-# Tạo bảng cartesian giữa full_dates và danh sách service từ booking
-dates_df['key'] = 1
-services_df['key'] = 1
-full_index_df = pd.merge(dates_df, services_df, on='key').drop('key', axis=1)
-
-# Merge booking data vào full_index_df theo (date, service_id, service_name)
-merged = pd.merge(full_index_df, df_booking, on=["date", "service_id", "service_name"], how="left", suffixes=('', '_booking'))
-merged['booking_count'] = merged['booking_count'].fillna(0)
-
-# Drop các cột dư (các cột có suffix '_booking')
-cols_to_drop = [col for col in merged.columns if col.endswith('_booking')]
-merged = merged.drop(columns=cols_to_drop)
-
-# Tính các feature từ cột date
-merged['day_of_week'] = merged['date'].dt.weekday
-merged['is_weekend'] = merged['date'].dt.weekday.apply(lambda x: 1 if x >= 5 else 0)
-merged['promotion_count'] = 0
-
-# Đảm bảo discount_from và discount_to không NULL: fill bằng default nếu cần
-default_date = pd.to_datetime('1900-01-01')
-merged['discount_from'] = pd.to_datetime(merged['discount_from']).fillna(default_date)
-merged['discount_to'] = pd.to_datetime(merged['discount_to']).fillna(default_date)
-
-# Compute discount_flag: ép kiểu các giá trị về pd.Timestamp trước so sánh
-def compute_discount_flag(row):
-    discount_from = pd.to_datetime(row['discount_from'])
-    discount_to   = pd.to_datetime(row['discount_to'])
-    date_value    = pd.to_datetime(row['date'])
-    if discount_from == default_date or discount_to == default_date:
-        return 0
-    return 1 if discount_from <= date_value <= discount_to else 0
-
-merged['discount_flag'] = merged.apply(compute_discount_flag, axis=1)
-
-# Compute final price: nếu discount_flag == 1 thì = base_price - discount_amount, else = base_price
-merged['price'] = merged.apply(lambda row: row['base_price'] - row['discount_amount'] if row['discount_flag'] == 1 else row['base_price'], axis=1)
-
-# Lấy các cột cần thiết
-final_df = merged.copy()
-
-# Chuyển đổi service_id và category_id sang numeric codes để model học được
+# Chuyển đổi service_id sang mã số
 final_df['service_id'] = final_df['service_id'].astype('category')
-service_mapping = dict(enumerate(final_df['service_id'].cat.categories))
 final_df['service_id'] = final_df['service_id'].cat.codes
 
+# Tương tự với category_id
 final_df['category_id'] = final_df['category_id'].astype('category')
-category_mapping = dict(enumerate(final_df['category_id'].cat.categories))
 final_df['category_id'] = final_df['category_id'].cat.codes
 
-# Debug: In shape và vài dòng để kiểm tra
+# Lấy các cột cần thiết
+# Giữ đầy đủ các thông tin: date, service_id, service_name, base_price, discount_amount, discount_from, discount_to,
+# day_of_week, is_weekend, promotion_count, discount_flag, booking_count
 print("Shape of final_df:", final_df.shape)
 print(final_df.head())
 
-# Ghi đè file data.csv mới
+# Ghi đè file data.csv mới (sẽ có ít dòng hơn, phản ánh chính xác số lượng booking thực tế)
 final_df.to_csv(DATA_FILE, index=False)
-print("ETL hoàn thành, lưu data mới vào", DATA_FILE)
+print("ETL completed, data saved to", DATA_FILE)
