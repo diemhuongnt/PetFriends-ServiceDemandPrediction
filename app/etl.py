@@ -11,7 +11,7 @@ DATA_FILE = os.path.join(BASE_DIR, "data.csv")
 
 DB_USERNAME = "petfriends"
 DB_PASSWORD = "Admin@123"
-DB_SERVER   = "160.30.137.29"
+DB_SERVER   = "160.250.133.192"
 DB_NAME     = "petfriends"
 DB_DRIVER   = "ODBC Driver 17 for SQL Server"
 
